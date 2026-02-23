@@ -1,0 +1,121 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=0.5in]{geometry}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{titlesec}
+
+% Color definitions
+\definecolor{linkcolor}{RGB}{0,0,238}
+\definecolor{sectioncolor}{RGB}{0,0,0}
+
+% Hyperref setup
+\hypersetup{
+    colorlinks=true,
+    linkcolor=linkcolor,
+    urlcolor=linkcolor,
+    pdfborder={0 0 0}
+}
+
+% Section formatting
+\titleformat{\section}{\large\bfseries\scshape}{}{0em}{}[\titlerule]
+\titlespacing{\section}{0pt}{10pt}{5pt}
+
+% Remove page numbers
+\pagenumbering{gobble}
+
+% Custom commands
+\newcommand{\resumeSubheading}[4]{
+  \item
+    \begin{tabular*}{0.97\textwidth}[t]{l@{\extracolsep{\fill}}r}
+      \textbf{#1} & #2 \\
+      \textit{\small#3} & \textit{\small #4} \\
+    \end{tabular*}\vspace{-5pt}
+}
+
+\begin{document}
+
+% Header
+\begin{center}
+    {\Huge \textbf{Aditya Jha}} \\
+    \vspace{5pt}
+    \small +91-9321343403 $|$ 
+    \href{mailto:adityajha1.work@gmail.com}{adityajha1.work@gmail.com} $|$ 
+    \href{https://linkedin.com/in/aditya-jha}{linkedin.com/in/aditya-jha} $|$ 
+    \href{https://leetcode.com/u/w-saa-d}{leetcode.com/u/w-saa-d}
+\end{center}
+
+% Professional Summary
+\section*{Professional Summary}
+AI Engineer with production experience deploying autonomous AI systems using LLMs and computer vision. Built and deployed multi-tenant SaaS platform processing 170+ orders with WhatsApp automation, engineered vision pipelines using Gemini 1.5 Flash achieving 95\%+ accuracy on 190+ SKUs, and integrated payment/e-commerce APIs. Strong technical skills in FastAPI, distributed systems, Redis state management, and production API integrations (Shopify, Razorpay, WhatsApp Business).
+
+% Technical Skills
+\section*{Technical Skills}
+\textbf{AI \& Machine Learning:} Multimodal LLMs (Gemini 1.5 Flash), Agentic Orchestration, Computer Vision (CNN-LSTM, MobileNetV2), Agentic RAG, LLM Fine-Tuning (LoRA), OpenCV, TensorFlow, PyTorch, Scikit-learn \\
+\textbf{Backend \& APIs:} FastAPI, Flask, REST APIs, Redis, PostgreSQL, Docker, Linux (systemd), PM2 \\
+\textbf{Cloud \& Integration:} Google Cloud Platform, Shopify API, WhatsApp Business API, Razorpay Webhooks, Shiprocket Logistics API
+
+% Professional Experience
+\section*{Professional Experience}
+
+\textbf{Software Engineer} \hfill Aug 2025 - Present \\
+\textit{VantageFlow AI} \hfill \textit{Mumbai, India}
+\begin{itemize}[leftmargin=0.15in, label={$\bullet$}, itemsep=0pt, parsep=2pt]
+    \item Deployed autonomous B2B commerce platform for production client, processing \textbf{170+ orders} with automated WhatsApp-to-fulfillment workflows, achieving \textbf{zero downtime} and \textbf{99\%+ order accuracy}.
+    \item Built production vision pipeline using \textbf{Gemini 1.5 Flash} achieving \textbf{95\%+ accuracy} across \textbf{190+ SKUs} for fabric pattern classification, reducing merchant onboarding from \textbf{2 weeks to under 1 day}.
+    \item Designed audit trail system with immutable logging for financial reconciliation and real-time observability across distributed microservices architecture.
+    \item Integrated Shopify, Razorpay, and Shiprocket APIs for e-commerce automation, implementing webhook handlers for payment processing and automated logistics coordination.
+\end{itemize}
+
+\textbf{Machine Learning Developer (Intern)} \hfill Dec 2023 - Feb 2024 \\
+\textit{Pragati - AI Object Detection Startup} \hfill \textit{Mumbai, India}
+\begin{itemize}[leftmargin=0.15in, label={$\bullet$}, itemsep=0pt, parsep=2pt]
+    \item Trained AI object detection and classification models, \textbf{boosting model accuracy by 20\%} on edge devices.
+    \item Deployed ML solutions into client-facing products, reducing inference latency by \textbf{200ms} on production-grade infrastructure.
+    \item Optimized model weights for cloud deployment, cutting \textbf{inference costs by 15\%}.
+\end{itemize}
+
+% Key Technical Projects
+\section*{Key Technical Projects}
+
+\textbf{AI-Driven WhatsApp Commerce Platform} $|$ \textit{FastAPI, Gemini 1.5, Shopify API, Razorpay} \hfill Dec 2024 \\
+\begin{itemize}[leftmargin=0.15in, label={$\bullet$}, itemsep=0pt, parsep=2pt]
+    \item Built AI-powered WhatsApp bot for automated e-commerce onboarding, deployed for production client processing \textbf{170+ orders} with automated product catalog generation from images.
+    \item Implemented computer vision pipeline using Gemini 1.5 Flash for product attribute extraction, achieving \textbf{95\%+ accuracy} on \textbf{190+ SKUs} (fabric type, color, pattern, price).
+    \item Developed payment reconciliation system with Razorpay webhooks, automated order status tracking, and Google Sheets integration for real-time inventory management.
+\end{itemize}
+
+\textbf{WhatsApp Lead Qualification Bot for Automotive} $|$ \textit{Flask, Meta WhatsApp API, Redis, Google Sheets} \hfill Nov 2024 \\
+\begin{itemize}[leftmargin=0.15in, label={$\bullet$}, itemsep=0pt, parsep=2pt]
+    \item Developed autonomous WhatsApp bot for car dealerships with 5-question conversation flow for lead qualification, implementing stateful conversation management using Redis with memory fallback.
+    \item Built intelligent lead scoring system (HOT/WARM/COLD) based on budget alignment, purchase timeline, and test drive interest, with automated Google Sheets logging and dealer notifications.
+    \item Architected rate-limited webhook handler with duplicate message detection and retry logic, achieving \textbf{99\%+ uptime} in testing environment.
+\end{itemize}
+
+\textbf{Autonomous Violence Detection System} $|$ \textit{MobileNetV2, CNN-LSTM, Edge AI} \hfill Nov 2023 \\
+\begin{itemize}[leftmargin=0.15in, label={$\bullet$}, itemsep=0pt, parsep=2pt]
+    \item Engineered a real-time surveillance system using \textbf{Edge AI} and \textbf{MobileNetV2} for violence detection in video streams.
+    \item Developed an automated \textbf{Telegram alert system} for instant frame-streaming of detected incidents to security personnel.
+\end{itemize}
+
+% Education
+\section*{Education}
+
+\textbf{Vellore Institute of Technology (VIT)} \hfill Vellore, India \\
+\textit{B.Tech in Computer Science $|$ CGPA: 7.6/10} \hfill \textit{2021 - 2025}
+
+\vspace{2pt}
+
+\textbf{Narayana Junior College} \hfill Mumbai, India \\
+\textit{Higher Secondary (Class XII) $|$ 91.83\%} \hfill \textit{2019 - 2021}
+
+% Leadership & Achievements
+\section*{Leadership \& Achievements}
+
+\textbf{Head Boy (Elected):} Managed a student body of 1,000+; served as primary liaison for school administration. \\
+\textbf{Competitive Programming:} Solved \textbf{250+ advanced problems} on LeetCode/CodeChef. \\
+\textbf{Customer Discovery:} Conducted interviews with 20+ e-commerce sellers to validate product-market fit for WhatsApp commerce. \\
+\textbf{Strategic Marketing:} Led a 2-year outreach campaign for VIT's Board Gamers Club, driving a \textbf{40\% increase in engagement}.
+
+\end{document}

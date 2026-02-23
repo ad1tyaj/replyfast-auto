@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ biz_name }} — ReplyFast Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:        #f5f6fa;
+      --surface:   #ffffff;
+      --border:    #e8eaed;
+      --text:      #1a1d23;
+      --muted:     #6b7280;
+      --accent:    #3b6fff;
+      --accent-bg: #eef2ff;
+      --green:     #16a34a;
+      --green-bg:  #f0fdf4;
+      --amber:     #d97706;
+      --amber-bg:  #fffbeb;
+      --red:       #dc2626;
+      --red-bg:    #fef2f2;
+      --radius:    12px;
+      --shadow:    0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+      --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    /* ── Top nav ─────────────────────────────────────────────────── */
+    .navbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      height: 58px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky; top: 0; z-index: 100;
+    }
+    .navbar-brand {
+      display: flex; align-items: center; gap: 10px;
+      font-weight: 700; font-size: 16px; color: var(--text);
+      text-decoration: none;
+    }
+    .navbar-brand .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--accent); animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 1; }
+      50%      { opacity: .4; }
+    }
+    .navbar-meta { color: var(--muted); font-size: 12px; }
+
+    /* ── Layout ──────────────────────────────────────────────────── */
+    .container { max-width: 1200px; margin: 0 auto; padding: 28px 32px; }
+
+    .page-header { margin-bottom: 24px; }
+    .page-header h1 { font-size: 22px; font-weight: 700; }
+    .page-header p  { color: var(--muted); font-size: 13px; margin-top: 3px; }
+
+    /* ── Chip / badge ─────────────────────────────────────────────── */
+    .chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 600;
+      padding: 3px 10px; border-radius: 99px;
+      text-transform: uppercase; letter-spacing: .4px;
+    }
+    .chip-green  { background: var(--green-bg);  color: var(--green); }
+    .chip-amber  { background: var(--amber-bg);  color: var(--amber); }
+    .chip-red    { background: var(--red-bg);    color: var(--red); }
+    .chip-blue   { background: var(--accent-bg); color: var(--accent); }
+
+    /* ── KPI card grid ────────────────────────────────────────────── */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 24px;
+      box-shadow: var(--shadow);
+      transition: box-shadow .2s;
+      position: relative;
+      overflow: hidden;
+    }
+    .kpi-card:hover { box-shadow: var(--shadow-md); }
+
+    .kpi-card::before {
+      content: '';
+      position: absolute; top: 0; left: 0;
+      width: 4px; height: 100%;
+    }
+    .kpi-card.green::before { background: var(--green); }
+    .kpi-card.amber::before { background: var(--amber); }
+    .kpi-card.red::before   { background: var(--red); }
+    .kpi-card.blue::before  { background: var(--accent); }
+
+    .kpi-label {
+      font-size: 11px; font-weight: 600;
+      color: var(--muted); text-transform: uppercase; letter-spacing: .6px;
+      margin-bottom: 10px;
+    }
+    .kpi-value {
+      font-size: 32px; font-weight: 700;
+      color: var(--text); line-height: 1;
+    }
+    .kpi-sub {
+      font-size: 12px; color: var(--muted); margin-top: 6px;
+    }
+    .kpi-icon {
+      position: absolute; right: 20px; top: 20px;
+      font-size: 28px; opacity: .12;
+    }
+
+    /* ── Sections ─────────────────────────────────────────────────── */
+    .section { margin-bottom: 28px; }
+    .section-title {
+      font-size: 13px; font-weight: 600; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .6px;
+      margin-bottom: 14px;
+    }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media(max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* ── Card ─────────────────────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    /* ── Stat row ─────────────────────────────────────────────────── */
+    .stat-row {
+      display: flex; justify-content: space-between;
+      align-items: center; padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-row:last-child { border-bottom: none; padding-bottom: 0; }
+    .stat-row-label { color: var(--muted); font-size: 13px; }
+    .stat-row-value { font-weight: 600; font-size: 14px; }
+
+    /* ── Bar (show rate) ──────────────────────────────────────────── */
+    .bar-track {
+      height: 8px; background: var(--border);
+      border-radius: 99px; margin-top: 16px; overflow: hidden;
+    }
+    .bar-fill {
+      height: 100%; border-radius: 99px;
+      background: var(--green);
+      transition: width 1s ease;
+    }
+    .bar-fill.amber { background: var(--amber); }
+    .bar-fill.red   { background: var(--red); }
+
+    /* ── Revenue card ─────────────────────────────────────────────── */
+    .revenue-big {
+      font-size: 36px; font-weight: 700; color: var(--accent);
+      margin: 8px 0 4px;
+    }
+
+    /* ── Table ────────────────────────────────────────────────────── */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .table-wrap table { width: 100%; border-collapse: collapse; }
+    .table-wrap th {
+      background: var(--bg);
+      font-size: 11px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: .5px;
+      color: var(--muted);
+      padding: 12px 16px; text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    .table-wrap td {
+      padding: 13px 16px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .table-wrap tr:last-child td { border-bottom: none; }
+    .table-wrap tr:hover td { background: var(--bg); transition: background .15s; }
+
+    .empty-row td {
+      text-align: center; color: var(--muted);
+      padding: 32px; font-size: 13px;
+    }
+
+    /* ── Wait badge ───────────────────────────────────────────────── */
+    .wait-badge {
+      display: inline-block;
+      padding: 2px 8px; border-radius: 6px;
+      font-size: 11px; font-weight: 600;
+      background: var(--amber-bg); color: var(--amber);
+    }
+    .wait-badge.long {
+      background: var(--red-bg); color: var(--red);
+    }
+
+    /* ── Status badge ─────────────────────────────────────────────── */
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px; border-radius: 6px;
+      font-size: 11px; font-weight: 600;
+    }
+    .status-booked  { background: var(--accent-bg); color: var(--accent); }
+    .status-showed  { background: var(--green-bg);  color: var(--green); }
+    .status-noshow  { background: var(--red-bg);    color: var(--red); }
+
+    /* ── Footer ───────────────────────────────────────────────────── */
+    .footer {
+      text-align: center; color: var(--muted);
+      font-size: 12px; padding: 24px;
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Navbar ──────────────────────────────────────────────────── -->
+<nav class="navbar">
+  <a class="navbar-brand" href="#">
+    <span class="dot"></span>
+    ReplyFast
+  </a>
+  <span class="navbar-meta">{{ generated_at }}</span>
+</nav>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<div class="container">
+
+  <!-- Page header -->
+  <div class="page-header">
+    <h1>{{ biz_name }}</h1>
+    <p>
+      Live performance dashboard &nbsp;·&nbsp;
+      {% if industry == "clinic" %}
+        <span class="chip chip-blue">🏥 Clinic</span>
+      {% else %}
+        <span class="chip chip-blue">🚗 Auto Dealer</span>
+      {% endif %}
+      &nbsp;·&nbsp; {{ currency }}
+    </p>
+  </div>
+
+  <!-- ── KPI Cards ───────────────────────────────────────────────── -->
+  <div class="kpi-grid">
+
+    <div class="kpi-card blue">
+      <div class="kpi-icon">📥</div>
+      <div class="kpi-label">Leads today</div>
+      <div class="kpi-value">{{ leads_today }}</div>
+      <div class="kpi-sub">{{ leads_week }} this week</div>
+    </div>
+
+    <div class="kpi-card
+      {% if hot_pending > 3 %}red{% elif hot_pending > 0 %}amber{% else %}green{% endif %}">
+      <div class="kpi-icon">🔥</div>
+      <div class="kpi-label">Uncontacted HOT</div>
+      <div class="kpi-value">{{ hot_pending }}</div>
+      <div class="kpi-sub">
+        {% if hot_pending > 0 %}
+          Needs immediate action
+        {% else %}
+          All HOT leads contacted ✅
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="kpi-card {{ show_alert }}">
+      <div class="kpi-icon">📅</div>
+      <div class="kpi-label">Show rate</div>
+      <div class="kpi-value">{{ show_rate.rate_label }}</div>
+      <div class="kpi-sub">{{ show_rate.showed }} showed / {{ show_rate.total }} booked</div>
+    </div>
+
+    <div class="kpi-card {{ response_alert }}">
+      <div class="kpi-icon">⚡</div>
+      <div class="kpi-label">Avg response time</div>
+      <div class="kpi-value">{{ response.avg_label }}</div>
+      <div class="kpi-sub">{{ response.sample_count }} contacts logged</div>
+    </div>
+
+  </div><!-- /kpi-grid -->
+
+  <!-- ── Row 2: Stats ─────────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-title">Performance breakdown</div>
+    <div class="two-col">
+
+      <!-- Show rate card -->
+      <div class="card">
+        <div class="stat-row">
+          <span class="stat-row-label">Total appointments</span>
+          <span class="stat-row-value">{{ show_rate.total }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Showed up</span>
+          <span class="stat-row-value" style="color:var(--green)">{{ show_rate.showed }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">No-shows</span>
+          <span class="stat-row-value" style="color:var(--red)">{{ show_rate.noshow }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Show rate</span>
+          <span class="stat-row-value">{{ show_rate.rate_label }}</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill {{ show_alert }}"
+               style="width:{{ show_rate.rate_pct }}%"></div>
+        </div>
+      </div>
+
+      <!-- Response time card -->
+      <div class="card">
+        <div class="stat-row">
+          <span class="stat-row-label">Avg response time</span>
+          <span class="stat-row-value">{{ response.avg_label }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Fastest response</span>
+          <span class="stat-row-value" style="color:var(--green)">{{ response.fastest }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Slowest response</span>
+          <span class="stat-row-value" style="color:var(--red)">{{ response.slowest }}</span>
+        </div>
+        <div class="stat-row">
+          <span class="stat-row-label">Contacts logged</span>
+          <span class="stat-row-value">{{ response.sample_count }}</span>
+        </div>
+
+        <!-- SLA guide -->
+        <div style="margin-top:16px; padding:12px; background:var(--bg);
+                    border-radius:8px; font-size:12px; color:var(--muted);">
+          <strong style="color:var(--text)">Response SLA</strong><br>
+          🟢 &lt; 5 min — Excellent &nbsp;
+          🟡 &lt; 10 min — OK &nbsp;
+          🔴 &gt; 10 min — Revenue risk
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Revenue estimate ─────────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-title">Estimated revenue pipeline</div>
+    <div class="card">
+      <div style="display:flex; gap: 40px; flex-wrap:wrap; align-items:center;">
+        <div>
+          <div class="kpi-label">Projected revenue</div>
+          <div class="revenue-big">{{ currency }} {{ "{:,}".format(revenue.revenue) }}</div>
+          <div class="kpi-sub">Based on {{ show_rate.total }} bookings
+            → {{ revenue.shows }} shows → {{ revenue.closes }} closes
+            @ {{ currency }} {{ "{:,}".format(avg_deal) }} avg deal</div>
+        </div>
+        <div style="flex:1; min-width:180px;">
+          <div class="stat-row">
+            <span class="stat-row-label">Estimated shows</span>
+            <span class="stat-row-value">{{ revenue.shows }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-row-label">Estimated closes (30%)</span>
+            <span class="stat-row-value">{{ revenue.closes }}</span>
+          </div>
+          <div class="stat-row">
+            <span class="stat-row-label">Avg deal value</span>
+            <span class="stat-row-value">{{ currency }} {{ "{:,}".format(avg_deal) }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Pending HOT leads ─────────────────────────────────────────── -->
+  {% if pending_leads %}
+  <div class="section">
+    <div class="section-title">🔥 Pending HOT leads — act now</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Phone</th>
+            <th>{% if industry == 'clinic' %}Service{% else %}Model{% endif %}</th>
+            <th>Waiting</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for lead in pending_leads %}
+          <tr>
+            <td><strong>{{ lead.name }}</strong></td>
+            <td>{{ lead.phone }}</td>
+            <td>{{ lead.service or "—" }}</td>
+            <td>
+              <span class="wait-badge {% if lead.wait_sec > 600 %}long{% endif %}">
+                {{ lead.wait }}
+              </span>
+            </td>
+            <td>
+              {% if lead.contacted %}
+                <span class="chip chip-green">✅ Contacted</span>
+              {% elif lead.mgr_alerted %}
+                <span class="chip chip-red">🚨 Manager alerted</span>
+              {% elif lead.rep_alerted %}
+                <span class="chip chip-amber">⚠️ Rep alerted</span>
+              {% else %}
+                <span class="chip chip-blue">New</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- ── Recent appointments ──────────────────────────────────────── -->
+  <div class="section">
+    <div class="section-title">Recent appointments</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>{% if industry == 'clinic' %}Service{% else %}Vehicle{% endif %}</th>
+            <th>Time</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% if appointments %}
+            {% for appt in appointments %}
+            <tr>
+              <td><strong>{{ appt.name }}</strong></td>
+              <td>{{ appt.service }}</td>
+              <td>{{ appt.time }}</td>
+              <td>
+                <span class="status-badge status-{{ appt.status }}">
+                  {% if appt.status == "showed" %}✅ Showed
+                  {% elif appt.status == "noshow" %}❌ No-show
+                  {% else %}📅 Booked
+                  {% endif %}
+                </span>
+              </td>
+            </tr>
+            {% endfor %}
+          {% else %}
+            <tr class="empty-row">
+              <td colspan="4">No appointments yet — they'll appear here once booked.</td>
+            </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<div class="footer">
+  Powered by <strong>ReplyFast</strong> &nbsp;·&nbsp;
+  Data refreshes on page reload &nbsp;·&nbsp;
+  <a href="/admin/dashboard/" style="color:var(--accent); text-decoration:none;">
+    All dealers →
+  </a>
+</div>
+
+</body>
+</html>
