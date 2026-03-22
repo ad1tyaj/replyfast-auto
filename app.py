@@ -1,9 +1,11 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import re
 import logging
 import time
+import threading
+import dateparser
 import os
 
 from flask import Flask, request, jsonify
@@ -242,24 +244,45 @@ def mark_message_processed(message_id):
 # Integrations
 # =========================
 
-def send_whatsapp_message(wa_id, message_body, buttons=None, max_retries=3):
+def send_whatsapp_message(wa_id, message_body, buttons=None, max_retries=3,
+                           client_config=None):
     """
     Sends WhatsApp message using Meta WhatsApp Business API with retry logic.
     'buttons' must be a list of button titles or None.
+    Pass 'client_config' to use that client's own access_token / phone_number_id
+    instead of the global .env values (per-client multi-tenant messaging).
     """
+    # ── Resolve per-client credentials (fall back to global .env if not set) ──
+    access_token    = (client_config or {}).get("access_token")    or None
+    phone_number_id = (client_config or {}).get("phone_number_id") or None
+    if access_token or phone_number_id:
+        logger.info(
+            f"🔑 [PER-CLIENT CREDS] Using custom phone_id={phone_number_id} "
+            f"for {(client_config or {}).get('dealer_name', wa_id)}"
+        )
+
     for attempt in range(max_retries):
         try:
             if buttons and len(buttons) > 0:
                 if len(buttons) <= 3:
-                    # Use interactive buttons for 3 or fewer options
-                    result = meta_api.send_interactive_button_message(wa_id, message_body, buttons)
+                    result = meta_api.send_interactive_button_message(
+                        wa_id, message_body, buttons,
+                        access_token=access_token,
+                        phone_number_id=phone_number_id
+                    )
                 else:
-                    # Use interactive list for more than 3 options
-                    result = meta_api.send_interactive_list_message(wa_id, message_body, "Please select:", buttons)
+                    result = meta_api.send_interactive_list_message(
+                        wa_id, message_body, "Please select:", buttons,
+                        access_token=access_token,
+                        phone_number_id=phone_number_id
+                    )
             else:
-                # Send simple text message
-                result = meta_api.send_text_message(wa_id, message_body)
-            
+                result = meta_api.send_text_message(
+                    wa_id, message_body,
+                    access_token=access_token,
+                    phone_number_id=phone_number_id
+                )
+
             if result['success']:
                 logger.info(f"✅ [WHATSAPP MESSAGE SENT] To: {wa_id}")
                 logger.info(f"   Message: {message_body[:100]}...")
@@ -269,32 +292,35 @@ def send_whatsapp_message(wa_id, message_body, buttons=None, max_retries=3):
             else:
                 logger.error(f"❌ [WHATSAPP MESSAGE FAILED] To: {wa_id} (Attempt {attempt + 1}/{max_retries})")
                 logger.error(f"   Error: {result.get('error', 'Unknown error')}")
-                if attempt == max_retries - 1:  # Last attempt
+                if attempt == max_retries - 1:
                     return result
-                time.sleep(2 ** attempt)  # Exponential backoff
-                
+                time.sleep(2 ** attempt)
+
         except Exception as e:
             logger.error(f"❌ [WHATSAPP MESSAGE ERROR] To: {wa_id} (Attempt {attempt + 1}/{max_retries})")
             logger.error(f"   Exception: {str(e)}")
-            if attempt == max_retries - 1:  # Last attempt
+            if attempt == max_retries - 1:
                 return {"success": False, "error": str(e)}
-            time.sleep(2 ** attempt)  # Exponential backoff
-    
+            time.sleep(2 ** attempt)
+
     return {"success": False, "error": "Max retries exceeded"}
 
 
-def log_lead_to_sheet(lead_data):
+def log_lead_to_sheet(lead_data, client_config=None):
     """
     Logs the lead to Google Sheets using direct API (preferred) or webhook fallback.
+    Pass client_config to route this lead to the correct per-client sheet.
+    Falls back to global SHEET_ID/.env if client has no sheet_id configured.
     """
     try:
         # Try direct Google Sheets API first
         if SHEETS_API_MODE == "direct" and GOOGLE_SHEETS_AVAILABLE:
-            return log_lead_to_sheets_api(lead_data)
+            return log_lead_to_sheets_api(lead_data, client_config=client_config)
         
         # Fall back to webhook (Apps Script)
-        if SHEET_KEY:
-            return log_lead_to_sheets_webhook(lead_data)
+        effective_sheet_key = (client_config or {}).get("sheet_key") or SHEET_KEY
+        if effective_sheet_key:
+            return log_lead_to_sheets_webhook(lead_data, client_config=client_config)
         
         # If neither is configured, log locally only
         logger.warning(f"⚠️ [SHEETS WARNING] No Google Sheets integration configured")
@@ -307,6 +333,23 @@ def log_lead_to_sheet(lead_data):
         logger.info(f"📊 [LEAD LOGGED LOCALLY AS FALLBACK]")
         logger.info(f"   {json.dumps(lead_data, indent=2)}")
         return {"success": False, "fallback": "local", "error": str(e)}
+
+
+def log_lead_async(lead_data, client_config=None):
+    """
+    Fire-and-forget Google Sheets logging — runs in a background daemon thread.
+    The WhatsApp reply and dealer notification are NOT blocked by the Sheets API call.
+    """
+    def _run():
+        try:
+            log_lead_to_sheet(lead_data, client_config=client_config)
+        except Exception as e:
+            logger.error(f"❌ [ASYNC SHEETS ERROR]: {e}")
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    dealer_label = (client_config or {}).get("dealer_name", "default")
+    logger.info(f"🚀 [SHEETS ASYNC] Logging fired in background for '{dealer_label}'")
 
 
 def notify_dealer_callback(wa_id, customer_name="Customer", q_status=None):
@@ -351,10 +394,16 @@ def notify_dealer_callback(wa_id, customer_name="Customer", q_status=None):
 
 
 
-def log_lead_to_sheets_api(lead_data):
+def log_lead_to_sheets_api(lead_data, client_config=None):
     """
     Logs lead to Google Sheets using the Google Sheets API directly.
+    Uses client_config['sheet_id'] if set, otherwise falls back to global SHEET_ID.
     """
+    # ── Resolve which sheet to write to ──────────────────────────────────────
+    effective_sheet_id = (client_config or {}).get("sheet_id") or SHEET_ID
+    dealer_label = (client_config or {}).get("dealer_name", "default")
+    logger.info(f"📋 [SHEETS] Routing lead for '{dealer_label}' → spreadsheetId={effective_sheet_id}")
+
     try:
         if not GOOGLE_SHEETS_AVAILABLE:
             logger.error("❌ Google Sheets API libraries not available")
@@ -376,7 +425,7 @@ def log_lead_to_sheets_api(lead_data):
         
         # Get the sheet to check if headers exist
         result = sheet.values().get(
-            spreadsheetId=SHEET_ID,
+            spreadsheetId=effective_sheet_id,
             range='Sheet1!A1:Z1'
         ).execute()
         
@@ -390,7 +439,7 @@ def log_lead_to_sheets_api(lead_data):
                 'Trade-in', 'Contact Details', 'Lead Score', 'Preferred Time', 'Status'
             ]
             sheet.values().append(
-                spreadsheetId=SHEET_ID,
+                spreadsheetId=effective_sheet_id,
                 range='Sheet1!A1',
                 valueInputOption='RAW',
                 body={'values': [headers]}
@@ -416,7 +465,7 @@ def log_lead_to_sheets_api(lead_data):
         
         # Append the data row
         append_result = sheet.values().append(
-            spreadsheetId=SHEET_ID,
+            spreadsheetId=effective_sheet_id,
             range='Sheet1!A:M',
             valueInputOption='RAW',
             body={'values': [data_row]}
@@ -425,40 +474,46 @@ def log_lead_to_sheets_api(lead_data):
         logger.info(f"✅ [LEAD LOGGED TO SHEETS - API]")
         logger.info(f"   WA ID: {lead_data.get('wa_id')}")
         logger.info(f"   Lead Score: {lead_data.get('lead_score')}")
+        logger.info(f"   Sheet: {effective_sheet_id}")
         logger.info(f"   Range: {append_result.get('updates', {}).get('updatedRange', 'N/A')}")
         
-        return {"success": True, "method": "api", "range": append_result.get('updates', {}).get('updatedRange')}
+        return {"success": True, "method": "api", "sheet_id": effective_sheet_id,
+                "range": append_result.get('updates', {}).get('updatedRange')}
         
     except Exception as e:
-        logger.error(f"❌ [SHEETS API ERROR]: {str(e)}")
-        # Fall back to webhook
-        if SHEET_KEY:
+        logger.error(f"❌ [SHEETS API ERROR] (sheet={effective_sheet_id}): {str(e)}")
+        # Fall back to webhook using the same client config
+        effective_sheet_key = (client_config or {}).get("sheet_key") or SHEET_KEY
+        if effective_sheet_key:
             logger.info("⚠️ [SHEETS] Falling back to webhook method...")
-            return log_lead_to_sheets_webhook(lead_data)
+            return log_lead_to_sheets_webhook(lead_data, client_config=client_config)
         return {"success": False, "error": str(e)}
 
 
-def log_lead_to_sheets_webhook(lead_data):
+def log_lead_to_sheets_webhook(lead_data, client_config=None):
     """
     Logs lead to Google Sheets using Apps Script webhook.
+    Uses client_config['sheet_key'] if set, otherwise falls back to global SHEET_KEY.
     """
+    effective_sheet_key = (client_config or {}).get("sheet_key") or SHEET_KEY
     try:
-        webhook_url = f"https://script.google.com/macros/s/{SHEET_KEY}/exec"
+        webhook_url = f"https://script.google.com/macros/s/{effective_sheet_key}/exec"
         response = requests.post(webhook_url, json=lead_data, timeout=10)
         
         if response.status_code == 200:
             logger.info(f"✅ [LEAD LOGGED TO SHEETS - WEBHOOK]")
             logger.info(f"   WA ID: {lead_data.get('wa_id')}")
             logger.info(f"   Lead Score: {lead_data.get('lead_score')}")
+            logger.info(f"   Sheet Key: {effective_sheet_key}")
             return {"success": True, "method": "webhook", "response": response.text}
         else:
-            logger.error(f"❌ [SHEETS WEBHOOK FAILED]")
+            logger.error(f"❌ [SHEETS WEBHOOK FAILED] (key={effective_sheet_key})")
             logger.error(f"   Status Code: {response.status_code}")
             logger.error(f"   Response: {response.text}")
             return {"success": False, "error": response.text}
             
     except Exception as e:
-        logger.error(f"❌ [SHEETS WEBHOOK ERROR]: {str(e)}")
+        logger.error(f"❌ [SHEETS WEBHOOK ERROR] (key={effective_sheet_key}): {str(e)}")
         return {"success": False, "error": str(e)}
 
 
@@ -736,12 +791,14 @@ def complete_lead(wa_id, state):
         "intent": state.get("intent", "WARM"),  # NEW: Store detected intent
     }
 
-    log_lead_to_sheet(lead_data)
-
-    # 🔔 Instant dealer notification for HOT + WARM leads
-    # Get client config using recipient_id stored in state at session start
+    # 🔔 Resolve client config using recipient_id stored in state at session start
+    # Must happen BEFORE log_lead_to_sheet so the lead goes to the correct per-client sheet
     recipient_id  = state.get("recipient_id", "")
     client_config = get_client_config(recipient_id)
+    # 🚀 Log to Sheets asynchronously — does NOT block the WhatsApp response
+    log_lead_async(lead_data, client_config=client_config)
+
+    # Instant dealer notification for HOT + WARM leads
     notify_hot_lead_dealer(lead_data, client_config)
 
     # ═══════════════════════════════════════════════════════════
@@ -959,9 +1016,59 @@ def webhook_message():
     # ═══════════════════════════════════════════════════════════
     redis_cli = r if REDIS_AVAILABLE else None
     active_appt = get_active_appointment(wa_id, redis_cli)
+
+    # ── Per-request send helper — captures this client's WhatsApp credentials ──
+    # Lazily evaluated: client_config is looked up once from recipient_id.
+    # All outbound messages in this request go through this wrapper so they
+    # automatically use the correct access_token + phone_number_id.
+    _req_client_config = get_client_config(recipient_id)
+    def send_msg(to, body, buttons=None):
+        return send_whatsapp_message(to, body, buttons=buttons,
+                                     client_config=_req_client_config)
+
+    # ═══════════════════════════════════════════════════════════
+    # P5: TRAI Opt-Out (STOP) Interceptor
+    # ═══════════════════════════════════════════════════════════
+    incoming_lower = incoming_text.lower().strip()
+    
+    # ── 1. Check for Opt-In (Restart) ──
+    opt_in_keywords = ["start", "unstop", "subscribe", "resume"]
+    if any(incoming_lower == kw for kw in opt_in_keywords):
+        if state.get("opted_out"):
+            state["opted_out"] = False
+            state["q_status"] = 0
+            save_user_state(wa_id, state)
+            send_msg(wa_id, "✅ You have successfully subscribed to messages again. Type 'HI' to start over.")
+            return jsonify({"status": "ok", "step": "opt_in_processed"})
+
+    # ── 2. Check if currently opted out ──
+    if state.get("opted_out"):
+        logger.info(f"🛑 [BLOCKED] {wa_id} is opted out. Dropping message: '{incoming_text}'")
+        return "", 200
+
+    # ── 3. Check for Opt-Out (Stop) ──
+    opt_out_keywords = ["stop", "unsubscribe", "cancel", "opt out", "nahi chahiye", "band karo"]
+    if any(incoming_lower == kw for kw in opt_out_keywords):
+        state["opted_out"] = True
+        
+        # Override the default 1-hour expiry for state — save for 365 days
+        if REDIS_AVAILABLE:
+            r.setex(wa_id, 365 * 24 * 3600, json.dumps(state))
+            r.zrem("active_sessions", wa_id) # ensure follow-ups are cancelled
+        else:
+            save_user_state(wa_id, state) # fallback
+            
+        send_msg(
+            wa_id, 
+            "🛑 You have been unsubscribed. You will not receive any more messages from us.\n\n"
+            "If this was a mistake, type *START* to resume."
+        )
+        logger.info(f"🛑 [OPT-OUT] {wa_id} has opted out of all messages.")
+        return jsonify({"status": "ok", "step": "opt_out_processed"})
+
     if active_appt and detect_reschedule_intent(incoming_text):
         cust_name = active_appt.get("name", answers.get("name", "there"))
-        handle_reschedule(wa_id, cust_name, redis_cli, send_whatsapp_message)
+        handle_reschedule(wa_id, cust_name, redis_cli, send_msg)
         state["q_status"] = 7   # Back to awaiting new time
         save_user_state(wa_id, state)
         return jsonify({"status": "ok", "step": "reschedule_initiated"})
@@ -980,8 +1087,8 @@ def webhook_message():
     
     if q_status == 0:
         if incoming_text.lower() in ['start', 'begin', 'hi', 'hello', 'hey', 'hii', 'hlo']:
-            # Look up client config by business phone number (not sender)
-            client_config = get_client_config(recipient_id)
+            # client_config already resolved above as _req_client_config
+            client_config = _req_client_config
             biz_name      = client_config.get("dealer_name", "ReplyFast Auto")
             industry      = client_config.get("industry", "car_dealer")
 
@@ -993,14 +1100,14 @@ def webhook_message():
             if industry == "clinic":
                 # ── CLINIC WELCOME ─────────────────────────────────────
                 sub_industry = client_config.get("sub_industry", "clinic")
-                send_clinic_welcome(wa_id, biz_name, send_whatsapp_message, sub_industry)
+                send_clinic_welcome(wa_id, biz_name, send_msg, sub_industry)
                 state["q_status"] = 10  # Awaiting booking intent
                 save_user_state(wa_id, state)
                 logger.info(f"✅ [CLINIC WELCOME] Sent to {wa_id} for {biz_name}")
                 return jsonify({"status": "ok", "step": "sent_clinic_welcome"})
             else:
-                # ── CAR DEALER WELCOME (unchanged) ─────────────────────
-                send_welcome_optimized(wa_id, biz_name, send_whatsapp_message)
+                # ── CAR DEALER WELCOME ──────────────────────────────────
+                send_welcome_optimized(wa_id, biz_name, send_msg)
                 state["q_status"] = 0.5
                 save_user_state(wa_id, state)
                 logger.info(f"✅ [OPTIMIZED WELCOME] Sent to {wa_id} for {biz_name}")
@@ -1008,11 +1115,10 @@ def webhook_message():
         else:
             industry = state.get("industry", "car_dealer")
             if industry == "clinic":
-                client_config = get_client_config(recipient_id)
-                biz_name = client_config.get("dealer_name", "the clinic")
-                send_whatsapp_message(wa_id, f"👋 Welcome! Type *HI* to book an appointment with *{biz_name}*.")
+                biz_name = _req_client_config.get("dealer_name", "the clinic")
+                send_msg(wa_id, f"👋 Welcome! Type *HI* to book an appointment with *{biz_name}*.")
             else:
-                send_whatsapp_message(
+                send_msg(
                     wa_id,
                     "🚗 Welcome to ReplyFast Auto!\n\nType 'HI' to get started! 👋"
                 )
@@ -1031,9 +1137,8 @@ def webhook_message():
         save_user_state(wa_id, state)
         
         logger.info(f"🎯 [INTENT DETECTED] {wa_id}: {intent}")
-        # ✅ FIX 3: Use recipient_id (business phone) for client config lookup
-        client_config = get_client_config(recipient_id)
-        send_q_budget_early(wa_id, send_whatsapp_message, client_config)
+        client_config = _req_client_config
+        send_q_budget_early(wa_id, send_msg, client_config)
         return jsonify({"status": "ok", "step": "sent_budget_question"})
 
 
@@ -1212,7 +1317,7 @@ def webhook_message():
             return jsonify({"status": "ok", "step": "appt_prompt_sent"})
 
         # Try to parse the date/time from free text
-        # We accept any free-text date — if parsing fails we store as string
+        # We use dateparser to handle natural language like "Tomorrow 3pm" or "Friday at 10:00"
         appt_text = incoming_text.strip()
         if len(appt_text) < 4:
             send_whatsapp_message(
@@ -1221,6 +1326,36 @@ def webhook_message():
                 "Example: *Saturday, 1 March at 11 AM*"
             )
             return jsonify({"status": "ok", "step": "appt_invalid_input"})
+
+        # Build a datetime using dateparser
+        try:
+            # Parse the date string; prefer dates in the future
+            appt_dt = dateparser.parse(appt_text, settings={'PREFER_DATES_FROM': 'future'})
+            
+            # If dateparser couldn't decipher it, or returned a date in the past, fall back
+            if not appt_dt:
+                raise ValueError("Could not parse date")
+            
+            # Ensure the appointment is not in the past
+            if appt_dt < datetime.now():
+                 # It might have interpreted something ambiguously; explicitly force future
+                 # e.g., if it's 3 PM and user says "2 PM", assume tomorrow
+                 if appt_dt.date() == datetime.now().date():
+                     appt_dt += timedelta(days=1)
+                 else:
+                     raise ValueError("Date is in the past")
+
+        except Exception as e:
+            logger.warning(f"⚠️ [DATE PARSE FAILED] Input: '{appt_text}', Error: {e}")
+            send_whatsapp_message(
+                wa_id,
+                "I couldn't quite understand that date and time. Could you try rephrasing it?\n\n"
+                "Examples:\n"
+                "• *Tomorrow at 2 PM*\n"
+                "• *Next Friday 10:30 AM*\n"
+                "• *March 5th at 4:00 PM*"
+            )
+            return jsonify({"status": "ok", "step": "appt_invalid_date_format"})
 
         # Pull details from existing lead data
         cust_name    = answers.get("name", "Customer")
@@ -1231,16 +1366,6 @@ def webhook_message():
         dealer_wa_appt    = client_cfg_appt.get("dealer_whatsapp", "")
         maps_link_appt    = client_cfg_appt.get("showroom_maps_link", "")
         dealer_name_appt  = client_cfg_appt.get("dealer_name", "ReplyFast Auto")
-
-        # Build a rough datetime — use tomorrow as default if date parsing fails
-        try:
-            from datetime import datetime, timedelta
-            # Simple heuristic: parse tomorrow if no date given
-            appt_dt = datetime.now() + timedelta(days=1)
-            appt_dt = appt_dt.replace(hour=11, minute=0, second=0, microsecond=0)
-        except Exception:
-            from datetime import datetime, timedelta
-            appt_dt = datetime.now() + timedelta(days=1)
 
         book_appointment(
             wa_id=wa_id,
@@ -1253,6 +1378,7 @@ def webhook_message():
             send_msg_fn=send_whatsapp_message,
             redis_client=redis_cli,
             dealer_name=dealer_name_appt,
+            slot_capacity=client_cfg_appt.get("slot_capacity", 1),
         )
         # Store appointment time text in state for reference
         state["appointment_text"] = appt_text
@@ -1293,8 +1419,8 @@ def webhook_message():
                 "status": "Callback Requested"
             }
             
-            # Log to Google Sheets
-            log_lead_to_sheet(callback_data)
+            # 🚀 Log asynchronously — callback confirmation fires instantly
+            log_lead_async(callback_data, client_config=_req_client_config)
             
             # Notify dealer
             notify_dealer_callback(wa_id, customer_name=customer_name, q_status=None)
@@ -1451,7 +1577,8 @@ def webhook_message():
             "industry":       "clinic",
             "sub_industry":   sub_industry,
         }
-        log_lead_to_sheet(lead_data)
+        # 🚀 Log asynchronously — clinic booking confirmation fires instantly
+        log_lead_async(lead_data, client_config=client_config)
 
         # Notify clinic staff via WhatsApp
         if dealer_wa:
@@ -1512,16 +1639,58 @@ def health_check():
 
 
 # ═══════════════════════════════════════════════════════════
-# P4: Revenue Dashboard
+# P4: Revenue Dashboard  (token-protected)
 # ═══════════════════════════════════════════════════════════
+
+def _dashboard_denied(reason=""):
+    """Return a clean 403 page."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>403 — Access Denied</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    body{{font-family:Inter,sans-serif;background:#f5f6fa;display:flex;
+          align-items:center;justify-content:center;height:100vh;margin:0;}}
+    .box{{text-align:center;padding:40px;background:#fff;border-radius:12px;
+          box-shadow:0 1px 3px rgba(0,0,0,.1);max-width:400px;}}
+    h1{{font-size:20px;color:#dc2626;margin-bottom:8px;}}
+    p{{color:#6b7280;font-size:14px;margin:0;}}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>🔒 Access Denied</h1>
+    <p>Invalid or missing dashboard token.<br>Contact ReplyFast support to get your link.</p>
+    {'<p style="margin-top:10px;font-size:12px;color:#9ca3af">' + reason + '</p>' if reason else ''}
+  </div>
+</body></html>""", 403
+
 
 @app.route("/admin/dashboard/<dealer_wa>", methods=["GET"])
 @limiter.exempt
 def dealer_dashboard(dealer_wa):
-    """Per-dealer live dashboard."""
-    redis_cli     = r if REDIS_AVAILABLE else None
-    client_config = get_client_config(dealer_wa)
-    data          = get_dashboard_data(dealer_wa, redis_cli, client_config)
+    """Per-dealer live dashboard — protected by per-client token."""
+    client_config  = get_client_config(dealer_wa)
+
+    # ── Token check ─────────────────────────────────────────────────
+    expected_token = client_config.get("dashboard_token", "")
+    provided_token = request.args.get("token", "")
+
+    if not expected_token:
+        # Client exists but has no token configured — block access
+        logger.warning(f"⚠️ [DASHBOARD] No token configured for {dealer_wa}")
+        return _dashboard_denied("No token configured for this client.")
+
+    if not provided_token or provided_token != expected_token:
+        logger.warning(f"🔒 [DASHBOARD] Token mismatch for {dealer_wa} — got '{provided_token[:8]}...'")
+        return _dashboard_denied()
+    # ────────────────────────────────────────────────────────────────
+
+    redis_cli = r if REDIS_AVAILABLE else None
+    data      = get_dashboard_data(dealer_wa, redis_cli, client_config)
+    logger.info(f"📊 [DASHBOARD] Accessed by {dealer_wa}")
     return render_template("dashboard.html", **data)
 
 
@@ -1529,13 +1698,22 @@ def dealer_dashboard(dealer_wa):
 @limiter.exempt
 def dashboard_index():
     """
-    All-dealers index: shows a card per registered client with a link
-    to their individual dashboard.
+    Platform-owner index: lists all clients with their token-embedded dashboard links.
+    Protected by ?admin_key= (set DASHBOARD_ADMIN_KEY env var, default: replyfast-admin).
+    Clients NEVER see this page — they only get their own token link.
     """
+    import os as _os, json as _json
+
+    # ── Admin key check ─────────────────────────────────────────────
+    admin_key    = _os.environ.get("DASHBOARD_ADMIN_KEY", "replyfast-admin")
+    provided_key = request.args.get("admin_key", "")
+    if provided_key != admin_key:
+        return _dashboard_denied("Admin key required.")
+    # ────────────────────────────────────────────────────────────────
+
     redis_cli = r if REDIS_AVAILABLE else None
     try:
         with open("clients.json") as f:
-            import json as _json
             clients_raw = _json.load(f).get("clients", {})
     except Exception:
         clients_raw = {}
@@ -1548,21 +1726,25 @@ def dashboard_index():
                 hot_count = redis_cli.zcard("hot:pending")
             except Exception:
                 pass
+        token = cfg.get("dashboard_token", "")
         summaries.append({
-            "dealer_wa":  phone,
-            "biz_name":   cfg.get("dealer_name", phone),
-            "industry":   cfg.get("industry", "car_dealer"),
-            "hot_count":  hot_count,
-            "url":        f"/admin/dashboard/{phone}",
+            "dealer_wa": phone,
+            "biz_name":  cfg.get("dealer_name", phone),
+            "industry":  cfg.get("industry", "car_dealer"),
+            "hot_count": hot_count,
+            # Full URL with token embedded — ready to share with client
+            "url":       f"/admin/dashboard/{phone}?token={token}",
+            "token":     token,
         })
 
     html_rows = "".join(
-        f'<tr><td><a href="{s["url"]}" style="color:#3b6fff;font-weight:600">'
-        f'{s["biz_name"]}</a></td>'
+        f'<tr>'
+        f'<td><strong>{s["biz_name"]}</strong></td>'
         f'<td>{s["industry"]}</td>'
-        f'<td style="color:{"#dc2626" if s["hot_count"] else "#16a34a"}">'
-        f'{s["hot_count"] or "0"}</td>'
-        f'<td><a href="{s["url"]}" style="color:#3b6fff">View →</a></td></tr>'
+        f'<td style="color:{"#dc2626" if s["hot_count"] else "#16a34a"}">{s["hot_count"] or "0"}</td>'
+        f'<td><code style="font-size:11px;color:#6b7280">{s["token"]}</code></td>'
+        f'<td><a href="{s["url"]}" style="color:#3b6fff" target="_blank">View →</a></td>'
+        f'</tr>'
         for s in summaries
     )
     return f"""<!DOCTYPE html>
@@ -1573,25 +1755,28 @@ def dashboard_index():
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
   <style>
     body{{font-family:Inter,sans-serif;background:#f5f6fa;color:#1a1d23;padding:40px}}
-    h1{{font-size:22px;margin-bottom:6px}}
+    h1{{font-size:22px;margin-bottom:4px}}
     p{{color:#6b7280;font-size:13px;margin-bottom:24px}}
-    table{{width:100%;max-width:700px;border-collapse:collapse;
-           background:#fff;border-radius:12px;overflow:hidden;
-           box-shadow:0 1px 3px rgba(0,0,0,.07)}}
+    .badge{{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;
+            font-weight:600;background:#fee2e2;color:#dc2626}}
+    table{{width:100%;max-width:900px;border-collapse:collapse;background:#fff;
+           border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.07)}}
     th{{background:#f5f6fa;font-size:11px;font-weight:600;text-transform:uppercase;
         letter-spacing:.5px;color:#6b7280;padding:12px 16px;text-align:left;
         border-bottom:1px solid #e8eaed}}
     td{{padding:13px 16px;border-bottom:1px solid #e8eaed;font-size:13px}}
     tr:last-child td{{border-bottom:none}}
+    .note{{margin-top:16px;font-size:12px;color:#9ca3af;max-width:900px}}
   </style>
 </head>
 <body>
   <h1>ReplyFast — All Clients</h1>
-  <p>Select a client to view their live dashboard.</p>
+  <p>Platform owner view. Share each client their own link (with token) — they cannot see other clients.</p>
   <table>
-    <thead><tr><th>Client</th><th>Industry</th><th>HOT leads</th><th></th></tr></thead>
+    <thead><tr><th>Client</th><th>Industry</th><th>HOT leads</th><th>Token</th><th></th></tr></thead>
     <tbody>{html_rows}</tbody>
   </table>
+  <p class="note">⚠️ Keep this page private. Tokens can be regenerated in clients.json at any time.</p>
 </body></html>"""
 
 

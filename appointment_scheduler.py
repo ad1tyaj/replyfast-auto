@@ -32,6 +32,8 @@ logger = logging.getLogger(__name__)
 APPT_KEY_PREFIX     = "appt:"           # Hash per user appointment
 APPT_SCHEDULE_KEY   = "appt_schedule"   # ZSet — score = appt Unix timestamp
 SHOWRATE_KEY_PREFIX = "showrate:"       # Hash per dealer — total/showed/noshow
+SLOT_LOCK_PREFIX    = "slot_lock:"      # String key — prevents double-booking
+SLOT_LOCK_TTL       = 300              # Lock expires after 5 min (covers booking flow)
 
 # ---------------------------------------------------------------------------
 # Reminder timing (seconds before appointment)
@@ -53,11 +55,90 @@ RESCHEDULE_KEYWORDS = [
 
 
 # ---------------------------------------------------------------------------
+# Slot Availability Helpers
+# ---------------------------------------------------------------------------
+
+def _slot_key(dealer_wa, appt_dt):
+    """Canonical Redis key for a dealer's time slot (rounded to 30-min blocks)."""
+    # Round down to nearest 30 min so 10:00 and 10:15 share the same slot
+    slot_minute = (appt_dt.minute // 30) * 30
+    slot_str = appt_dt.strftime(f"%Y%m%d_%H{slot_minute:02d}")
+    return f"{SLOT_LOCK_PREFIX}{dealer_wa}:{slot_str}"
+
+
+def is_slot_available(dealer_wa, appt_dt, redis_client, slot_capacity=1):
+    """
+    Returns True if the slot still has room, False if at capacity.
+    Call this BEFORE showing the user a time option.
+
+    slot_capacity=1  → clinic/doctor (one patient per slot)
+    slot_capacity=3  → car dealer   (multiple salespeople)
+    """
+    if not redis_client:
+        return True  # Redis down — optimistically allow
+    try:
+        count = redis_client.get(_slot_key(dealer_wa, appt_dt))
+        current = int(count) if count else 0
+        return current < slot_capacity
+    except Exception as e:
+        logger.error(f"❌ [SLOT CHECK ERROR] {e}")
+        return True  # Fail open
+
+
+def _acquire_slot_lock(dealer_wa, appt_dt, wa_id, redis_client, slot_capacity=1):
+    """
+    Atomically increments the slot counter and checks against capacity.
+    Returns True if slot was successfully claimed, False if slot is full.
+
+    Uses INCR (atomic) then compares to capacity — if over capacity,
+    decrements back so the count stays accurate.
+    """
+    if not redis_client:
+        return True  # Redis down — allow booking
+    try:
+        key = _slot_key(dealer_wa, appt_dt)
+        # Atomically increment
+        new_count = redis_client.incr(key)
+        # Set TTL on first booking
+        if new_count == 1:
+            redis_client.expire(key, SLOT_LOCK_TTL)
+
+        if new_count <= slot_capacity:
+            logger.debug(f"🔐 [SLOT] {key} = {new_count}/{slot_capacity} claimed")
+            return True
+        else:
+            # Over capacity — roll back
+            redis_client.decr(key)
+            logger.debug(f"🚫 [SLOT FULL] {key} at capacity {slot_capacity}")
+            return False
+    except Exception as e:
+        logger.error(f"❌ [SLOT LOCK ERROR] {e}")
+        return True  # Fail open
+
+
+def release_slot_lock(dealer_wa, appt_dt, redis_client):
+    """
+    Decrements the slot counter by 1 when a booking is cancelled/rescheduled.
+    Removes the key entirely if count reaches 0.
+    """
+    if not redis_client:
+        return
+    try:
+        key = _slot_key(dealer_wa, appt_dt)
+        remaining = redis_client.decr(key)
+        if remaining <= 0:
+            redis_client.delete(key)
+    except Exception as e:
+        logger.error(f"❌ [SLOT RELEASE ERROR] {e}")
+
+
+# ---------------------------------------------------------------------------
 # Core: Book Appointment
 # ---------------------------------------------------------------------------
 
 def book_appointment(wa_id, name, phone, model, appt_dt, dealer_wa,
-                     maps_link, send_msg_fn, redis_client, dealer_name="AutoDealer"):
+                     maps_link, send_msg_fn, redis_client, dealer_name="AutoDealer",
+                     slot_capacity=1):
     """
     Book a test drive appointment and send instant WhatsApp confirmation.
 
@@ -95,6 +176,20 @@ def book_appointment(wa_id, name, phone, model, appt_dt, dealer_wa,
 
     if redis_client:
         try:
+            # ── Capacity-aware slot lock — prevents overbooking ─────────────
+            if not _acquire_slot_lock(dealer_wa, appt_dt, wa_id, redis_client, slot_capacity):
+                logger.warning(
+                    f"🚫 [APPT SLOT FULL] {name} ({wa_id}) tried to book "
+                    f"{appt_dt.strftime('%d %b %Y %H:%M')} — slot at capacity {slot_capacity}."
+                )
+                # Inform the customer the slot is gone
+                send_msg_fn(
+                    wa_id,
+                    "⚠️ Sorry! That time slot was just taken by another customer.\n\n"
+                    "Please choose a different time and I'll book it for you right away! 😊"
+                )
+                return None  # Signal to caller that booking failed
+
             # Store appointment hash (expires in 3 days after appointment)
             redis_client.hset(appt_key, mapping=appt_data)
             redis_client.expireat(appt_key, int(appt_ts + 3 * 86400))

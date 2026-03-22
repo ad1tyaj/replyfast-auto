@@ -72,6 +72,7 @@ class TestBookAppointment(unittest.TestCase):
 
     def test_book_appointment_stores_redis_and_sends_confirmation(self):
         redis_mock = MagicMock()
+        redis_mock.incr.return_value = 1  # Mock slot capacity check
         send_mock  = MagicMock()
         appt_dt    = datetime.now() + timedelta(days=1)
 
